@@ -216,12 +216,10 @@ bubble; this won't *just* be `Throw` and `Catch.
 smallStep :: (Expr, Expr) -> Maybe (Expr, Expr)
 smallStep s@(prog, acc) =
   case prog of
-    -- Handle fully evaluated Plus
+    -- Arithmetic
     Plus (Const i) (Const j) -> Just (Const (i + j), acc)
-    -- Handle Throw bubbling on the left or right side
     Plus (Throw e) _ -> Just (Throw e, acc)
     Plus _ (Throw e) -> Just (Throw e, acc)
-    -- Evaluate the left side first if it's not a value
     Plus m n
       | not (isValue m) -> do
           (m', acc') <- smallStep (m, acc)
@@ -229,27 +227,38 @@ smallStep s@(prog, acc) =
       | not (isValue n) -> do
           (n', acc') <- smallStep (n, acc)
           Just (Plus m n', acc')
-    -- Handle other cases as before
-    Var _ -> Nothing
-    Lam _ _ -> Nothing
+    -- Applications
     App (Lam x m) n
-      | isValue n -> Just (subst x n m, acc)
+      | isValue n -> Just (subst x n m, acc) -- Function application when both are values
       | otherwise -> do
-          (n', acc') <- smallStep (n, acc)
+          (n', acc') <- smallStep (n, acc) -- Reduce the argument if not a value
           Just (App (Lam x m) n', acc')
-    Store m -> do
-      (m', acc') <- smallStep (m, acc)
-      Just (Store m', acc')
+    App (Throw e) _ -> Just (Throw e, acc) -- Propagate exception from the function
+    App f n
+      | not (isValue f) -> do
+          (f', acc') <- smallStep (f, acc) -- Reduce the function
+          Just (App f' n, acc')
+      | isValue f && not (isValue n) -> do
+          (n', acc') <- smallStep (n, acc) -- Reduce the argument
+          Just (App f n', acc')
+    App _ (Throw e) -> Just (Throw e, acc) -- Propagate exception from the argument
+    -- Store and Recall
+    Store m
+      | not (isValue m) -> do
+          (m', acc') <- smallStep (m, acc)
+          Just (Store m', acc')
+      | otherwise -> Just (Recall, m)
     Recall -> Just (acc, acc)
-    -- Ensure Throw evaluates its inner expression
+    -- Throw
     Throw e -> do
       (e', acc') <- smallStep (e, acc)
       Just (Throw e', acc')
-    -- Handle Catch properly
+    -- Catch
     Catch (Throw e) y n -> Just (subst y e n, acc)
     Catch m y n -> do
       (m', acc') <- smallStep (m, acc)
       Just (Catch m' y n, acc')
+    -- Default
     _ -> Nothing
 
 -- other cases for exceptions, etc.
