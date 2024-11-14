@@ -216,34 +216,41 @@ bubble; this won't *just* be `Throw` and `Catch.
 smallStep :: (Expr, Expr) -> Maybe (Expr, Expr)
 smallStep s@(prog, acc) =
   case prog of
-    Const i -> Nothing
+    -- Handle fully evaluated Plus
     Plus (Const i) (Const j) -> Just (Const (i + j), acc)
-    Plus (Const i) n -> do
-      (n', acc') <- smallStep (n, acc) -- Recursively reduce n.
-      Just (Plus (Const i) n', acc')
-    Plus m n -> do
-      (m', acc') <- smallStep (m, acc) -- Recursively reduce m.
-      Just (Plus m' n, acc')
+    -- Handle Throw bubbling on the left or right side
+    Plus (Throw e) _ -> Just (Throw e, acc)
+    Plus _ (Throw e) -> Just (Throw e, acc)
+    -- Evaluate the left side first if it's not a value
+    Plus m n
+      | not (isValue m) -> do
+          (m', acc') <- smallStep (m, acc)
+          Just (Plus m' n, acc')
+      | not (isValue n) -> do
+          (n', acc') <- smallStep (n, acc)
+          Just (Plus m n', acc')
+    -- Handle other cases as before
     Var _ -> Nothing
     Lam _ _ -> Nothing
     App (Lam x m) n
       | isValue n -> Just (subst x n m, acc)
       | otherwise -> do
-          (n', acc') <- smallStep (n, acc) -- Recursively reduce n.
+          (n', acc') <- smallStep (n, acc)
           Just (App (Lam x m) n', acc')
     Store m -> do
-      (m', acc') <- smallStep (m, acc) -- Recursively reduce m.
+      (m', acc') <- smallStep (m, acc)
       Just (Store m', acc')
     Recall -> Just (acc, acc)
-    -- Handle the Throw case by propagating it directly
-    Throw e -> Just (Throw e, acc)
-    -- Combine the Throw cases for Plus
-    Plus (Throw e) _ -> Just (Throw e, acc)
-    Plus _ (Throw e) -> Just (Throw e, acc)
+    -- Ensure Throw evaluates its inner expression
+    Throw e -> do
+      (e', acc') <- smallStep (e, acc)
+      Just (Throw e', acc')
+    -- Handle Catch properly
     Catch (Throw e) y n -> Just (subst y e n, acc)
     Catch m y n -> do
       (m', acc') <- smallStep (m, acc)
       Just (Catch m' y n, acc')
+    _ -> Nothing
 
 -- other cases for exceptions, etc.
 
