@@ -1,4 +1,5 @@
 {-# LANGUAGE StandaloneDeriving #-}
+
 module Problems10 where
 
 {-------------------------------------------------------------------------------
@@ -10,9 +11,9 @@ This problem set explores another extension of the λ-calculus with effects.
 
 The new effect we're adding is *exceptions*.  We have two operations:
 
-* The expression `Throw m` throws an exception; the exception's payload is the
+\* The expression `Throw m` throws an exception; the exception's payload is the
   value of expression `m`.
-* The expression `Catch m y n` runs expression `m`:
+\* The expression `Catch m y n` runs expression `m`:
   - If that expression evaluates to `v`, then `Catch m y n` also evaluates to
     `v`.
   - If that expression throws an exception with payload `w`, then `Catch m y n`
@@ -32,15 +33,20 @@ accumulator was.
 
 -- Here is our expression data type
 
-data Expr = -- Arithmetic
-            Const Int | Plus Expr Expr 
-            -- λ-calculus
-          | Var String | Lam String Expr | App Expr Expr
-            -- accumulator
-          | Store Expr | Recall 
-            -- exceptions
-          | Throw Expr | Catch Expr String Expr 
-  deriving Eq          
+data Expr -- Arithmetic
+  = Const Int
+  | Plus Expr Expr
+  | -- λ-calculus
+    Var String
+  | Lam String Expr
+  | App Expr Expr
+  | -- accumulator
+    Store Expr
+  | Recall
+  | -- exceptions
+    Throw Expr
+  | Catch Expr String Expr
+  deriving (Eq)
 
 deriving instance Show Expr
 
@@ -59,13 +65,13 @@ instance Show Expr where
   showsPrec i Recall    = showString "recall"
   showsPrec i (Throw m) = showParen (i > 2) $ showString "throw " . showsPrec 3 m
   showsPrec i (Catch m y n) = showParen (i > 0) $ showString "try " . showsPrec 0 m . showString " catch " . showString y . showString " -> " . showsPrec 0 n
--}  
+-}
 
 -- Values are, as usual, integer and function constants
 isValue :: Expr -> Bool
 isValue (Const _) = True
 isValue (Lam _ _) = True
-isValue _         = False
+isValue _ = False
 
 {-------------------------------------------------------------------------------
 
@@ -96,19 +102,24 @@ be replaced by the substitution?
 -------------------------------------------------------------------------------}
 
 substUnder :: String -> Expr -> String -> Expr -> Expr
-substUnder x m y n 
+substUnder x m y n
   | x == y = n
   | otherwise = subst x m n
 
 subst :: String -> Expr -> Expr -> Expr
 subst _ _ (Const i) = Const i
 subst x m (Plus n1 n2) = Plus (subst x m n1) (subst x m n2)
-subst x m (Var y) 
+subst x m (Var y)
   | x == y = m
   | otherwise = Var y
 subst x m (Lam y n) = Lam y (substUnder x m y n)
 subst x m (App n1 n2) = App (subst x m n1) (subst x m n2)
-subst x m n = undefined
+subst x m (Store n) = Store (subst x m n)
+subst _ _ Recall = Recall
+subst x m (Throw n) = Throw (subst x m n)
+subst x m (Catch n y n')
+  | x == y = Catch (subst x m n) y n' -- Don't substitute inside `n'`
+  | otherwise = Catch (subst x m n) y (subst x m n')
 
 {-------------------------------------------------------------------------------
 
@@ -168,7 +179,7 @@ exception, but without something to catch the exception we can't simplify any
 further.
 
 Exceptions "bubble" through all the points evaluation can happen: `Plus`, `App`,
-and `Store`.  
+and `Store`.
 
 `Throw` itself also gets call-by-value treatment: an exception does not start
 "bubbling" until the thrown expression is itself a value.  Here is an example:
@@ -201,13 +212,51 @@ bubble; this won't *just* be `Throw` and `Catch.
 
 -------------------------------------------------------------------------------}
 
+-- You might want to change the function to return IO if you're using print
 smallStep :: (Expr, Expr) -> Maybe (Expr, Expr)
-smallStep = undefined
+smallStep s@(prog, acc) =
+  case prog of
+    Const i -> Nothing
+    Plus (Const i) (Const j) -> Just (Const (i + j), acc)
+    Plus (Const i) n -> do
+      (n', acc') <- smallStep (n, acc) -- Recursively reduce n.
+      Just (Plus (Const i) n', acc')
+    Plus m n -> do
+      (m', acc') <- smallStep (m, acc) -- Recursively reduce m.
+      Just (Plus m' n, acc')
+    Var _ -> Nothing
+    Lam _ _ -> Nothing
+    App (Lam x m) n
+      | isValue n -> Just (subst x n m, acc)
+      | otherwise -> do
+          (n', acc') <- smallStep (n, acc) -- Recursively reduce n.
+          Just (App (Lam x m) n', acc')
+    Store m -> do
+      (m', acc') <- smallStep (m, acc) -- Recursively reduce m.
+      Just (Store m', acc')
+    Recall -> Just (acc, acc)
+    -- Handle the Throw case by propagating it directly
+    Throw e -> Just (Throw e, acc)
+    -- Combine the Throw cases for Plus
+    Plus (Throw e) _ -> Just (Throw e, acc)
+    Plus _ (Throw e) -> Just (Throw e, acc)
+    Catch (Throw e) y n -> Just (subst y e n, acc)
+    Catch m y n -> do
+      (m', acc') <- smallStep (m, acc)
+      Just (Catch m' y n, acc')
 
+-- other cases for exceptions, etc.
+
+-- Throw only reduces if the argument is a valu
 steps :: (Expr, Expr) -> [(Expr, Expr)]
-steps s = case smallStep s of
-            Nothing -> [s]
-            Just s' -> s : steps s'
+steps s = steps' s [] -- Start with an empty list of seen steps.
 
-prints :: Show a => [a] -> IO ()
+steps' :: (Expr, Expr) -> [(Expr, Expr)] -> [(Expr, Expr)]
+steps' s@(prog, acc) prevSteps
+  | s `elem` prevSteps = [s] -- If we've seen this state before, stop recursion.
+  | otherwise = case smallStep s of
+      Nothing -> [s] -- No more steps, return the current state as the result.
+      Just s' -> s : steps' s' (s : prevSteps) -- Add the current state to the result and continue, while updating prevSteps.
+
+prints :: (Show a) => [a] -> IO ()
 prints = mapM_ print
