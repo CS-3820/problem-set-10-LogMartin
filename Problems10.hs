@@ -212,7 +212,6 @@ bubble; this won't *just* be `Throw` and `Catch.
 
 -------------------------------------------------------------------------------}
 
--- You might want to change the function to return IO if you're using print
 smallStep :: (Expr, Expr) -> Maybe (Expr, Expr)
 smallStep s@(prog, acc) =
   case prog of
@@ -227,21 +226,22 @@ smallStep s@(prog, acc) =
       | not (isValue n) -> do
           (n', acc') <- smallStep (n, acc)
           Just (Plus m n', acc')
+
     -- Applications
     App (Lam x m) n
-      | isValue n -> Just (subst x n m, acc) -- Function application when both are values
+      | isValue n -> Just (subst x n m, acc)
       | otherwise -> do
-          (n', acc') <- smallStep (n, acc) -- Reduce the argument if not a value
+          (n', acc') <- smallStep (n, acc)
           Just (App (Lam x m) n', acc')
-    App (Throw e) _ -> Just (Throw e, acc) -- Propagate exception from the function
+    App (Throw e) _ -> Just (Throw e, acc)
     App f n
       | not (isValue f) -> do
-          (f', acc') <- smallStep (f, acc) -- Reduce the function
+          (f', acc') <- smallStep (f, acc)
           Just (App f' n, acc')
-      | isValue f && not (isValue n) -> do
-          (n', acc') <- smallStep (n, acc) -- Reduce the argument
+      | not (isValue n) -> do
+          (n', acc') <- smallStep (n, acc)
           Just (App f n', acc')
-    App _ (Throw e) -> Just (Throw e, acc) -- Propagate exception from the argument
+    App _ (Throw e) -> Just (Throw e, acc)
     -- Store and Recall
     Store m
       | not (isValue m) -> do
@@ -249,30 +249,32 @@ smallStep s@(prog, acc) =
           Just (Store m', acc')
       | otherwise -> Just (Recall, m)
     Recall -> Just (acc, acc)
-    -- Throw
+    -- Throw propagation
+    Throw (Throw e) -> Just (Throw e, acc)
     Throw e -> do
       (e', acc') <- smallStep (e, acc)
       Just (Throw e', acc')
+
     -- Catch
     Catch (Throw e) y n -> Just (subst y e n, acc)
-    Catch m y n -> do
-      (m', acc') <- smallStep (m, acc)
-      Just (Catch m' y n, acc')
-    -- Default
+    Catch m y n
+      | not (isValue m) -> do
+          (m', acc') <- smallStep (m, acc)
+          Just (Catch m' y n, acc')
+
+    -- Default (no applicable step)
     _ -> Nothing
 
--- other cases for exceptions, etc.
-
--- Throw only reduces if the argument is a valu
+-- Helper functions for multi-step evaluation
 steps :: (Expr, Expr) -> [(Expr, Expr)]
-steps s = steps' s [] -- Start with an empty list of seen steps.
+steps s = steps' s []
 
 steps' :: (Expr, Expr) -> [(Expr, Expr)] -> [(Expr, Expr)]
 steps' s@(prog, acc) prevSteps
-  | s `elem` prevSteps = [s] -- If we've seen this state before, stop recursion.
+  | s `elem` prevSteps = [s]
   | otherwise = case smallStep s of
-      Nothing -> [s] -- No more steps, return the current state as the result.
-      Just s' -> s : steps' s' (s : prevSteps) -- Add the current state to the result and continue, while updating prevSteps.
+      Nothing -> [s]
+      Just s' -> s : steps' s' (s : prevSteps)
 
 prints :: (Show a) => [a] -> IO ()
 prints = mapM_ print
